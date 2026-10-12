@@ -15,7 +15,6 @@ pub struct Strings {
     pub charging: &'static str,
     pub charged: &'static str,
     pub until_full: &'static str,
-    pub battery: &'static str,
 }
 
 static EN: Strings = Strings {
@@ -29,7 +28,6 @@ static EN: Strings = Strings {
     charging: "Charging",
     charged: "Charged",
     until_full: "until full",
-    battery: "Battery",
 };
 
 static PT: Strings = Strings {
@@ -43,7 +41,6 @@ static PT: Strings = Strings {
     charging: "Carregando",
     charged: "Carregada",
     until_full: "para carregar",
-    battery: "Bateria",
 };
 
 pub fn strings() -> &'static Strings {

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The island: a black pill in the panel showing what's going on, music,
-//! a timer, the charger plugged in, that opens into its live activities.
+//! The island: what's going on, music, a timer, the charger plugged in, in
+//! the panel, opening into its live activities, drawn as COSMIC draws its own
+//! applets.
 
 use std::{
     collections::HashMap,
@@ -10,14 +11,15 @@ use std::{
 
 use cosmic::{
     Element, Task, app,
+    applet::{menu_button, padded_control},
     iced::{
-        self, Alignment, Color, Length, Limits, Subscription,
+        self, Alignment, Length, Subscription,
         core::text::{Ellipsize, EllipsizeHeightLimit},
         platform_specific::shell::commands::popup::destroy_popup,
         window,
     },
     theme,
-    widget,
+    widget::{self, button, divider, text},
 };
 
 use crate::{
@@ -25,20 +27,18 @@ use crate::{
     media::{self, Control, Media},
     power::{self, Battery},
     timer::{self, Timer},
-    widgets::{self, Bars, Expand, GRAY, GREEN, ORANGE, WHITE, alpha, ghost, glyph, island, tint},
+    widgets::{Bars, accent, accent_of, icon, success_of, tinted, warning_of},
 };
 
-/// The popup's width: the cards and the room for their glow.
-const WIDTH: f32 = 400.0;
-/// Around the cards, for their glow to show.
-const MARGIN: f32 = 12.0;
-const CARD_RADIUS: f32 = 30.0;
 /// A paused player stays on the island this long, then leaves it.
 const LINGER: Duration = Duration::from_secs(5 * 60);
 /// How long the island shows the charger plugged in, or the timer done.
 const FLASH_CHARGING: Duration = Duration::from_secs(4);
 const FLASH_TIMER: Duration = Duration::from_secs(10);
 const PRESETS: [u64; 4] = [1, 5, 10, 25];
+/// Room for the title in the panel.
+const TITLE_WIDTH: f32 = 160.0;
+const COVER: f32 = 56.0;
 
 #[derive(Default)]
 pub struct App {
@@ -54,7 +54,6 @@ pub struct App {
     timer: Option<Timer>,
     battery: Option<Battery>,
     flash: Option<(Flash, Instant)>,
-    hovered: bool,
 }
 
 /// Something that happened, shown for a moment over the rest.
@@ -86,7 +85,6 @@ enum Activity<'a> {
 pub enum Message {
     TogglePopup,
     Closed(window::Id),
-    Hover(bool),
     Media(Vec<Media>),
     Control(Control),
     SelectPlayer(String),
@@ -113,28 +111,58 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
     })
 }
 
-fn popup_limits() -> Limits {
-    Limits::NONE
-        .min_width(WIDTH)
-        .max_width(WIDTH)
-        .min_height(1.0)
-        .max_height(1000.0)
-}
-
 fn one_line() -> Ellipsize {
     Ellipsize::End(EllipsizeHeightLimit::Lines(1))
-}
-
-fn label<'a>(text: impl Into<String>, size: u16, color: Color) -> widget::Text<'a, cosmic::Theme> {
-    widget::text(text.into())
-        .size(size)
-        .class(theme::Text::Color(color))
 }
 
 /// 3:07, from microseconds.
 fn time(micros: f32) -> String {
     let seconds = (micros.max(0.0) / 1_000_000.0) as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn island_icon() -> widget::icon::Handle {
+    widget::icon::from_svg_bytes(
+        &include_bytes!(
+            "../data/icons/scalable/apps/io.github.DrakRosmann.CosmicExtAppletDynamicIsland-symbolic.svg"
+        )[..],
+    )
+    .symbolic(true)
+}
+
+fn battery_icon(percentage: f64, charging: bool) -> String {
+    let level = ((percentage / 10.0).round() * 10.0).clamp(0.0, 100.0) as u32;
+    match (level, charging) {
+        (100, true) => "battery-level-100-charged-symbolic".to_owned(),
+        (_, true) => format!("battery-level-{level}-charging-symbolic"),
+        (_, false) => format!("battery-level-{level}-symbolic"),
+    }
+}
+
+fn divided<'a>() -> Element<'a, Message> {
+    let space = theme::active().cosmic().spacing;
+    padded_control(divider::horizontal::default())
+        .padding([space.space_xxs, space.space_s])
+        .into()
+}
+
+/// A cover, rounded as the theme rounds things, or a note where there's none.
+/// Small ones, in the panel, less round.
+fn cover<'a>(media: &Media, side: f32) -> Element<'a, Message> {
+    let radii = theme::active().cosmic().corner_radii;
+    let radius = if side < 32.0 { radii.radius_xs } else { radii.radius_s };
+    match &media.art {
+        Some(path) => widget::image(widget::image::Handle::from_path(path))
+            .width(Length::Fixed(side))
+            .height(Length::Fixed(side))
+            .content_fit(iced::ContentFit::Cover)
+            .border_radius(radius)
+            .into(),
+        None => widget::container(icon("audio-x-generic-symbolic", (side * 0.5) as u16))
+            .center(Length::Fixed(side))
+            .class(theme::Container::Card)
+            .into(),
+    }
 }
 
 impl App {
@@ -174,44 +202,78 @@ impl App {
         }
     }
 
-    /// The timer, when the island shows something else: in a bubble beside it.
-    fn bubble(&self) -> Option<&Timer> {
+    /// The timer, when the island shows something else: beside it.
+    fn side_timer(&self) -> Option<&Timer> {
         match self.activity() {
             Activity::Timer(_) => None,
             _ => self.timer.as_ref(),
         }
     }
 
-    /// The island's size in the panel: its height, the panel's less some air,
-    /// and its width, wide when something is on.
-    fn pill_size(&self) -> (f32, f32) {
+    /// What the panel shows, and how wide it is, to center the popup under
+    /// it. Each part has a set width for that.
+    fn panel_parts(&self) -> (Vec<Element<'_, Message>>, f32) {
         let applet = &self.core.applet;
-        let size = f32::from(applet.suggested_size(true).0);
-        let minor = f32::from(applet.suggested_padding(true).1);
-        let height = (size + 2.0 * minor - 6.0).max(size);
-        if !applet.is_horizontal() {
-            return (height, height);
+        let size = applet.suggested_size(true).0;
+        let side = f32::from(size);
+        let horizontal = applet.is_horizontal();
+        let t = strings();
+        let mut parts: Vec<(Element<'_, Message>, f32)> = Vec::with_capacity(4);
+        let label = |text: String, width: f32| -> (Element<'_, Message>, f32) {
+            (
+                applet
+                    .text(text)
+                    .ellipsize(one_line())
+                    .width(Length::Fixed(width))
+                    .into(),
+                width,
+            )
+        };
+        // Wide enough for 59:59, or 9:59:59.
+        let clock_width = |timer: &Timer| if timer.left().as_secs() >= 3600 { 64.0 } else { 44.0 };
+
+        match self.activity() {
+            Activity::Idle => parts.push((
+                widget::icon::icon(island_icon()).size(size).into(),
+                side,
+            )),
+            Activity::Media(media) => {
+                parts.push((cover(media, side), side));
+                if horizontal {
+                    parts.push(label(media.title.clone(), TITLE_WIDTH));
+                }
+                parts.push((Bars::new(accent(), media.playing, side).into(), side));
+            }
+            Activity::Timer(timer) => {
+                parts.push((tinted("alarm-symbolic", size, warning_of), side));
+                if horizontal {
+                    parts.push(label(timer::clock(timer.left()), clock_width(timer)));
+                }
+            }
+            Activity::Flash(Flash::Charging) => {
+                let percentage = self.battery.map_or(0.0, |b| b.percentage);
+                parts.push((tinted(&battery_icon(percentage, true), size, success_of), side));
+                if horizontal {
+                    parts.push(label(format!("{} · {percentage:.0}%", t.charging), 130.0));
+                }
+            }
+            Activity::Flash(Flash::TimerDone) => {
+                parts.push((tinted("alarm-symbolic", size, accent_of), side));
+                if horizontal {
+                    parts.push(label(t.timer_done.to_owned(), 120.0));
+                }
+            }
         }
-        let width = match self.activity() {
-            Activity::Idle => height * 3.4,
-            _ => (height * 8.5).clamp(180.0, 300.0),
-        };
-        (width, height)
-    }
-
-    fn bubble_width(&self, height: f32) -> f32 {
-        if self.core.applet.is_horizontal() { height * 2.6 } else { height }
-    }
-
-    /// The applet's whole width, to center the popup under it.
-    fn applet_width(&self) -> f32 {
-        let (width, height) = self.pill_size();
-        let major = f32::from(self.core.applet.suggested_padding(true).0);
-        let bubble = match self.bubble() {
-            Some(_) => self.bubble_width(height) + 6.0,
-            None => 0.0,
-        };
-        width + bubble + 2.0 * major
+        if let Some(timer) = self.side_timer() {
+            parts.push((tinted("alarm-symbolic", size, warning_of), side));
+            if horizontal {
+                parts.push(label(timer::clock(timer.left()), clock_width(timer)));
+            }
+        }
+        let spacing = f32::from(theme::active().cosmic().spacing.space_xs);
+        let width = parts.iter().map(|(_, w)| w).sum::<f32>()
+            + spacing * parts.len().saturating_sub(1) as f32;
+        (parts.into_iter().map(|(element, _)| element).collect(), width)
     }
 
     fn close_popup(&mut self) -> app::Task<Message> {
@@ -250,13 +312,12 @@ impl cosmic::Application for App {
                 cosmic::action::app(Message::TogglePopup)
             }));
         }
-        let task = Task::batch(tasks);
         (
             Self {
                 core,
                 ..Self::default()
             },
-            task,
+            Task::batch(tasks),
         )
     }
 
@@ -283,22 +344,23 @@ impl cosmic::Application for App {
                 };
                 let id = window::Id::unique();
                 self.popup = Some(id);
-                // Under the middle of the island, however wide it is.
-                let icon = f32::from(self.core.applet.suggested_size(true).0);
-                let half = ((self.applet_width() - icon) / 2.0).round() as i32;
-                let horizontal = self.core.applet.is_horizontal();
+                // Under the middle of the applet, however wide it is.
+                let applet = &self.core.applet;
+                let width = self.panel_parts().1;
+                let icon = f32::from(applet.suggested_size(true).0);
+                let major = i32::from(applet.suggested_padding(true).0);
+                let half = major + ((width - icon) / 2.0).round() as i32;
+                let horizontal = applet.is_horizontal();
                 return cosmic::surface::surface_task(cosmic::surface::action::app_popup(
                     |_: &Self| Default::default(),
                     move |app: &mut Self| {
-                        let mut settings = app.core.applet.get_popup_settings(
+                        app.core.applet.get_popup_settings(
                             parent,
                             id,
                             None,
                             horizontal.then_some(half),
                             None,
-                        );
-                        settings.positioner.size_limits = popup_limits();
-                        settings
+                        )
                     },
                     None,
                 ));
@@ -309,7 +371,6 @@ impl cosmic::Application for App {
                     self.seeking = None;
                 }
             }
-            Message::Hover(hovered) => self.hovered = hovered,
             Message::Media(media) => {
                 let now = Instant::now();
                 for m in &media {
@@ -329,9 +390,9 @@ impl cosmic::Application for App {
                         .filter(|m| m.playing)
                         .map(|m| &m.service)
                         .collect::<Vec<_>>();
-                    let started = media
-                        .iter()
-                        .any(|m| m.playing && &m.service != selected && !was_playing.contains(&&m.service));
+                    let started = media.iter().any(|m| {
+                        m.playing && &m.service != selected && !was_playing.contains(&&m.service)
+                    });
                     if started {
                         self.selected = None;
                     }
@@ -382,7 +443,7 @@ impl cosmic::Application for App {
             }
             Message::StartTimer(minutes) => {
                 self.timer = Some(Timer::start(Duration::from_secs(minutes * 60)));
-                if self.flash().is_some_and(|f| f == Flash::TimerDone) {
+                if self.flash() == Some(Flash::TimerDone) {
                     self.flash = None;
                 }
             }
@@ -421,7 +482,6 @@ impl cosmic::Application for App {
             media::subscription().map(Message::Media),
             power::subscription().map(Message::Battery),
         ];
-        // Each second, while something counts down or moves on.
         let lingering = self
             .paused_since
             .values()
@@ -446,176 +506,50 @@ impl cosmic::Application for App {
     fn view(&self) -> Element<'_, Message> {
         let applet = &self.core.applet;
         let (major, minor) = applet.suggested_padding(true);
-        let (width, height) = self.pill_size();
-        let horizontal = applet.is_horizontal();
-        let pad = (height * 0.18).round();
-        let inner = height - 2.0 * pad;
-        let t = strings();
-
-        let content: Element<'_, Message> = match self.activity() {
-            Activity::Idle => widget::space::horizontal().into(),
-            Activity::Media(media) => {
-                let color = tint(media.color);
-                let art = cover(media, inner, inner * 0.3);
-                if horizontal {
-                    widget::row::with_children(vec![
-                        art,
-                        label(media.title.clone(), 13, alpha(WHITE, 0.92))
-                            .font(cosmic::font::semibold())
-                            .ellipsize(one_line())
-                            .width(Length::Fill)
-                            .into(),
-                        Bars::new(color, media.playing, inner * 0.62).into(),
-                    ])
-                    .spacing(pad + 2.0)
-                    .align_y(Alignment::Center)
-                    .into()
-                } else {
-                    art
-                }
-            }
-            Activity::Timer(timer) => {
-                let icon = glyph("alarm-symbolic", (inner * 0.8) as u16, ORANGE);
-                if horizontal {
-                    let color = if timer.running() { ORANGE } else { alpha(ORANGE, 0.6) };
-                    widget::row::with_children(vec![
-                        icon,
-                        widget::space::horizontal().into(),
-                        label(timer::clock(timer.left()), 15, color)
-                            .font(cosmic::font::semibold())
-                            .into(),
-                    ])
-                    .align_y(Alignment::Center)
-                    .into()
-                } else {
-                    icon
-                }
-            }
-            Activity::Flash(Flash::Charging) => {
-                let battery = self.battery.map_or(0.0, |b| b.percentage);
-                let icon = glyph(&battery_icon(battery, true), (inner * 0.8) as u16, GREEN);
-                if horizontal {
-                    widget::row::with_children(vec![
-                        label(t.charging, 13, WHITE).font(cosmic::font::semibold()).into(),
-                        widget::space::horizontal().into(),
-                        label(format!("{battery:.0}%"), 14, GREEN)
-                            .font(cosmic::font::semibold())
-                            .into(),
-                        icon,
-                    ])
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .into()
-                } else {
-                    icon
-                }
-            }
-            Activity::Flash(Flash::TimerDone) => {
-                let icon = glyph("alarm-symbolic", (inner * 0.8) as u16, ORANGE);
-                if horizontal {
-                    widget::row::with_children(vec![
-                        icon,
-                        widget::space::horizontal().into(),
-                        label(t.timer_done, 13, ORANGE).font(cosmic::font::semibold()).into(),
-                    ])
-                    .align_y(Alignment::Center)
-                    .into()
-                } else {
-                    icon
-                }
-            }
-        };
-
-        let glow = match self.activity() {
-            Activity::Media(media) if media.playing => media.color.map(|c| tint(Some(c))),
-            _ => None,
-        };
-        let pill = widget::container(content)
-            .width(Length::Fixed(width))
-            .height(Length::Fixed(height))
-            .padding([pad, pad + 2.0])
-            .align_y(Alignment::Center)
-            .class(island(height / 2.0, glow, self.hovered, false));
-        let pill = widget::mouse_area(pill)
-            .on_press(Message::TogglePopup)
-            .on_middle_press(Message::Control(Control::PlayPause))
-            .on_enter(Message::Hover(true))
-            .on_exit(Message::Hover(false));
-
-        let mut items: Vec<Element<'_, Message>> = vec![pill.into()];
-        if let Some(timer) = self.bubble() {
-            let bubble_width = self.bubble_width(height);
-            let content: Element<'_, Message> = if horizontal {
-                widget::row::with_children(vec![
-                    glyph("alarm-symbolic", (inner * 0.7) as u16, ORANGE),
-                    label(timer::clock(timer.left()), 12, ORANGE)
-                        .font(cosmic::font::semibold())
-                        .into(),
-                ])
-                .spacing(3)
-                .align_y(Alignment::Center)
-                .into()
-            } else {
-                glyph("alarm-symbolic", (inner * 0.8) as u16, ORANGE)
-            };
-            let bubble = widget::container(content)
-                .width(Length::Fixed(bubble_width))
-                .height(Length::Fixed(height))
-                .center_x(Length::Fixed(bubble_width))
-                .center_y(Length::Fixed(height))
-                .class(island(height / 2.0, None, false, false));
-            items.push(widget::mouse_area(bubble).on_press(Message::TogglePopup).into());
-        }
-        let items: Element<'_, Message> = if horizontal {
-            widget::row::with_children(items)
-                .spacing(6)
+        let spacing = theme::active().cosmic().spacing.space_xs;
+        let (parts, _) = self.panel_parts();
+        let content: Element<'_, Message> = if applet.is_horizontal() {
+            widget::row::with_children(parts)
+                .spacing(spacing)
                 .align_y(Alignment::Center)
                 .into()
         } else {
-            widget::column::with_children(items)
-                .spacing(6)
+            widget::column::with_children(parts)
+                .spacing(spacing)
                 .align_x(Alignment::Center)
                 .into()
         };
-        let (x, y) = if horizontal {
-            (major, minor)
+        let padding = if applet.is_horizontal() {
+            [minor, major]
         } else {
-            (minor, major)
+            [major, minor]
         };
-        let body = widget::container(items)
-            .padding([f32::from(y) - (height - f32::from(applet.suggested_size(true).0)) / 2.0, f32::from(x)])
-            .center_y(Length::Shrink);
-        applet.autosize_window(body).into()
+        let button = button::custom(content)
+            .padding(padding)
+            .class(theme::Button::AppletIcon)
+            .on_press_down(Message::TogglePopup);
+        // The middle button plays or pauses, as on other players' icons.
+        let area = widget::mouse_area(button).on_middle_press(Message::Control(Control::PlayPause));
+        applet.autosize_window(area).into()
     }
 
     fn view_window(&self, id: window::Id) -> Element<'_, Message> {
         if self.popup != Some(id) {
             return widget::text("").into();
         }
-        let mut cards: Vec<Element<'_, Message>> = Vec::with_capacity(3);
-        if let Some(flash) = self.flash()
-            && flash == Flash::TimerDone
-        {
-            cards.push(self.timer_done_card());
+        let mut content = widget::column::with_capacity(8).padding([8, 0]);
+        if self.flash() == Some(Flash::TimerDone) {
+            content = content.push(self.timer_done_section()).push(divided());
         }
-        cards.push(match self.shown_media() {
-            Some(media) => self.media_card(media),
-            None => self.empty_card(),
-        });
-        cards.push(self.timer_card());
+        content = match self.shown_media() {
+            Some(media) => content.extend(self.media_section(media)),
+            None => content.push(self.empty_section()),
+        };
+        content = content.push(divided()).push(self.timer_section());
         if let Some(battery) = self.battery.filter(|b| b.charging) {
-            cards.push(battery_card(battery));
+            content = content.push(divided()).push(battery_section(battery));
         }
-        let content = widget::column::with_children(cards)
-            .spacing(10)
-            .padding(MARGIN)
-            .width(Length::Fill);
-        cosmic::widget::autosize::autosize(
-            Expand::new(content),
-            cosmic::widget::Id::new("cosmic-applet-autosize"),
-        )
-        .limits(popup_limits())
-        .into()
+        self.core.applet.popup_container(content).into()
     }
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {
@@ -623,355 +557,243 @@ impl cosmic::Application for App {
     }
 }
 
-/// A cover, rounded, or a note where there's none.
-fn cover<'a>(media: &Media, side: f32, radius: f32) -> Element<'a, Message> {
-    match &media.art {
-        Some(path) => widget::image(widget::image::Handle::from_path(path))
-            .width(Length::Fixed(side))
-            .height(Length::Fixed(side))
-            .content_fit(iced::ContentFit::Cover)
-            .border_radius([radius; 4])
-            .into(),
-        None => widget::container(glyph("audio-x-generic-symbolic", (side * 0.55) as u16, WHITE))
-            .center(Length::Fixed(side))
-            .class(theme::Container::custom(move |_| widget::container::Style {
-                background: Some(iced::Background::Color(alpha(WHITE, 0.14))),
-                border: iced::Border {
-                    radius: radius.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }))
-            .into(),
-    }
-}
-
-fn battery_icon(percentage: f64, charging: bool) -> String {
-    let level = ((percentage / 10.0).round() * 10.0).clamp(0.0, 100.0) as u32;
-    match (level, charging) {
-        (100, true) => "battery-level-100-charged-symbolic".to_owned(),
-        (_, true) => format!("battery-level-{level}-charging-symbolic"),
-        (_, false) => format!("battery-level-{level}-symbolic"),
-    }
-}
-
-fn card<'a>(
-    content: impl Into<Element<'a, Message>>,
-    glow: Option<Color>,
-) -> Element<'a, Message> {
-    widget::container(content)
-        .padding(18)
-        .width(Length::Fill)
-        .class(island(CARD_RADIUS, glow, false, true))
-        .into()
-}
-
-fn round_button<'a>(
-    icon: &str,
-    icon_size: u16,
-    side: f32,
-    background: Option<Color>,
-    color: Color,
-    message: Option<Message>,
-) -> Element<'a, Message> {
-    ghost(
-        widget::container(glyph(icon, icon_size, color)).center(Length::Fixed(side)),
-        side / 2.0,
-        background,
-    )
-    .padding(0)
-    .on_press_maybe(message)
-    .into()
-}
-
-fn chip<'a>(text: String, selected: bool, message: Message) -> Element<'a, Message> {
-    ghost(
-        label(text, 13, if selected { WHITE } else { GRAY }).font(cosmic::font::semibold()),
-        14.0,
-        Some(alpha(WHITE, if selected { 0.18 } else { 0.08 })),
-    )
-    .padding([6, 12])
-    .on_press(message)
-    .into()
-}
-
-fn battery_card<'a>(battery: Battery) -> Element<'a, Message> {
+fn battery_section<'a>(battery: Battery) -> Element<'a, Message> {
     let t = strings();
+    let space = theme::active().cosmic().spacing;
     let mut about = vec![
-        label(t.battery, 12, GRAY).into(),
-        label(
-            if battery.full { t.charged.to_owned() } else { t.charging.to_owned() },
-            15,
-            WHITE,
-        )
-        .font(cosmic::font::semibold())
-        .into(),
+        text::heading(if battery.full { t.charged } else { t.charging }).into(),
     ];
     if let Some(seconds) = battery.time_to_full {
         let (h, m) = (seconds / 3600, seconds / 60 % 60);
         let left = if h > 0 { format!("{h} h {m} min") } else { format!("{m} min") };
-        about.push(label(format!("{left} {}", t.until_full), 12, GRAY).into());
+        about.push(text::caption(format!("{left} {}", t.until_full)).into());
     }
-    card(
+    padded_control(
         widget::row::with_children(vec![
-            glyph(&battery_icon(battery.percentage, true), 28, GREEN),
-            widget::column::with_children(about).spacing(2).width(Length::Fill).into(),
-            label(format!("{:.0}%", battery.percentage), 26, GREEN)
-                .font(cosmic::font::semibold())
-                .into(),
+            tinted(&battery_icon(battery.percentage, true), 24, success_of),
+            widget::column::with_children(about).width(Length::Fill).into(),
+            text::title4(format!("{:.0}%", battery.percentage)).into(),
         ])
-        .spacing(14)
+        .spacing(space.space_s)
         .align_y(Alignment::Center),
-        None,
     )
+    .into()
 }
 
 impl App {
-    fn media_card<'a>(&'a self, media: &'a Media) -> Element<'a, Message> {
-        let color = tint(media.color);
-        let art = widget::mouse_area(cover(media, 72.0, 16.0))
-            .on_press(Message::Control(Control::Raise));
-        let mut source = vec![];
-        // The player's icon, when the theme has one.
-        if let Some(path) = media
-            .desktop_entry
-            .as_deref()
-            .and_then(|entry| widget::icon::from_name(entry).size(14).path())
-        {
-            source.push(
-                widget::icon::icon(widget::icon::from_path(path))
-                    .size(14)
-                    .into(),
-            );
-        }
-        source.push(label(media.player.clone(), 12, GRAY).ellipsize(one_line()).into());
-        let about = widget::column::with_children(vec![
-            label(media.title.clone(), 16, WHITE)
-                .font(cosmic::font::semibold())
+    fn media_section<'a>(&'a self, media: &'a Media) -> Vec<Element<'a, Message>> {
+        let space = theme::active().cosmic().spacing;
+        let t = strings();
+        let mut about = vec![
+            text::heading(media.title.clone())
                 .ellipsize(one_line())
                 .into(),
-            label(
-                if media.artist.is_empty() { strings().paused.to_owned() } else { media.artist.clone() },
-                14,
-                if media.artist.is_empty() { GRAY } else { alpha(WHITE, 0.7) },
-            )
-            .ellipsize(one_line())
-            .into(),
-            widget::row::with_children(source)
-                .spacing(5)
-                .align_y(Alignment::Center)
-                .into(),
-        ])
-        .spacing(2)
-        .width(Length::Fill);
-        let top = widget::row::with_children(vec![
-            art.into(),
-            about.into(),
-            widget::container(Bars::new(color, media.playing, 26.0).count(6))
-                .align_y(Alignment::Start)
-                .height(Length::Fixed(72.0))
-                .padding([4, 0])
-                .into(),
-        ])
-        .spacing(14)
-        .align_y(Alignment::Center);
+        ];
+        if !media.artist.is_empty() {
+            about.push(text::body(media.artist.clone()).ellipsize(one_line()).into());
+        }
+        let source = if media.playing {
+            media.player.clone()
+        } else {
+            format!("{} · {}", media.player, t.paused)
+        };
+        about.push(text::caption(source).ellipsize(one_line()).into());
+        // As the audio applet's player: clicking it brings the player up.
+        let header = menu_button(
+            widget::row::with_children(vec![
+                cover(media, COVER),
+                widget::column::with_children(about)
+                    .width(Length::Fill)
+                    .into(),
+                Bars::new(accent(), media.playing, 20.0).into(),
+            ])
+            .spacing(space.space_s)
+            .align_y(Alignment::Center),
+        )
+        .on_press(Message::Control(Control::Raise));
 
-        let mut rows: Vec<Element<'a, Message>> = vec![top.into()];
+        let mut rows: Vec<Element<'a, Message>> = vec![header.into()];
         if media.length > 0 {
             let length = media.length as f32;
             let position = self.seeking.unwrap_or(media.position_now() as f32).min(length);
-            let slider = widget::slider(0.0..=length, position, Message::Seek)
-                .on_release(Message::SeekDone)
-                .width(Length::Fill)
-                .class(widgets::progress_class(color));
             rows.push(
-                widget::row::with_children(vec![
-                    label(time(position), 12, GRAY)
-                        .width(Length::Fixed(40.0))
-                        .into(),
-                    slider.into(),
-                    label(format!("-{}", time(length - position)), 12, GRAY)
-                        .width(Length::Fixed(44.0))
-                        .align_x(Alignment::End)
-                        .into(),
-                ])
-                .spacing(8)
-                .align_y(Alignment::Center)
+                padded_control(
+                    widget::row::with_children(vec![
+                        text::caption(time(position)).width(Length::Fixed(40.0)).into(),
+                        widget::slider(0.0..=length, position, Message::Seek)
+                            .on_release(Message::SeekDone)
+                            .width(Length::Fill)
+                            .into(),
+                        text::caption(format!("-{}", time(length - position)))
+                            .width(Length::Fixed(44.0))
+                            .align_x(Alignment::End)
+                            .into(),
+                    ])
+                    .spacing(space.space_xs)
+                    .align_y(Alignment::Center),
+                )
                 .into(),
             );
         }
+        let control = |name: &str, message: Option<Message>| -> Element<'a, Message> {
+            button::icon(widget::icon::from_name(name).symbolic(true))
+                .medium()
+                .on_press_maybe(message)
+                .into()
+        };
+        let play = button::icon(
+            widget::icon::from_name(if media.playing {
+                "media-playback-pause-symbolic"
+            } else {
+                "media-playback-start-symbolic"
+            })
+            .symbolic(true),
+        )
+        .medium()
+        .class(theme::Button::Suggested)
+        .on_press(Message::Control(Control::PlayPause));
         rows.push(
-            widget::row::with_children(vec![
-                widget::space::horizontal().into(),
-                round_button(
-                    "media-skip-backward-symbolic",
-                    24,
-                    48.0,
-                    None,
-                    WHITE,
-                    media.can_previous.then_some(Message::Control(Control::Previous)),
-                ),
-                round_button(
-                    if media.playing {
-                        "media-playback-pause-symbolic"
-                    } else {
-                        "media-playback-start-symbolic"
-                    },
-                    32,
-                    60.0,
-                    None,
-                    WHITE,
-                    Some(Message::Control(Control::PlayPause)),
-                ),
-                round_button(
-                    "media-skip-forward-symbolic",
-                    24,
-                    48.0,
-                    None,
-                    WHITE,
-                    media.can_next.then_some(Message::Control(Control::Next)),
-                ),
-                widget::space::horizontal().into(),
-            ])
-            .spacing(24)
-            .align_y(Alignment::Center)
+            padded_control(
+                widget::row::with_children(vec![
+                    control(
+                        "media-skip-backward-symbolic",
+                        media.can_previous.then_some(Message::Control(Control::Previous)),
+                    ),
+                    play.into(),
+                    control(
+                        "media-skip-forward-symbolic",
+                        media.can_next.then_some(Message::Control(Control::Next)),
+                    ),
+                ])
+                .spacing(space.space_l)
+                .align_y(Alignment::Center),
+            )
+            .align_x(Alignment::Center)
             .into(),
         );
         // More than one player: each by name, to pick from.
         if self.media.len() > 1 {
-            let chips = self
+            let players = self
                 .media
                 .iter()
                 .map(|m| {
-                    chip(
-                        m.player.clone(),
-                        m.service == media.service,
-                        Message::SelectPlayer(m.service.clone()),
-                    )
+                    let pick = Message::SelectPlayer(m.service.clone());
+                    if m.service == media.service {
+                        button::suggested(m.player.clone()).on_press(pick).into()
+                    } else {
+                        button::standard(m.player.clone()).on_press(pick).into()
+                    }
                 })
                 .collect::<Vec<_>>();
             rows.push(
-                widget::container(widget::row::with_children(chips).spacing(6).wrap())
-                    .center_x(Length::Fill)
+                padded_control(widget::row::with_children(players).spacing(space.space_xxs).wrap())
+                    .align_x(Alignment::Center)
                     .into(),
             );
         }
-        card(
-            widget::column::with_children(rows).spacing(14),
-            media.playing.then_some(color).filter(|_| media.color.is_some()),
-        )
+        rows
     }
 
-    fn empty_card(&self) -> Element<'_, Message> {
+    fn empty_section(&self) -> Element<'_, Message> {
         let t = strings();
-        card(
+        let space = theme::active().cosmic().spacing;
+        padded_control(
             widget::row::with_children(vec![
-                widget::container(glyph("audio-x-generic-symbolic", 22, GRAY))
-                    .center(Length::Fixed(44.0))
-                    .class(theme::Container::custom(|_| widget::container::Style {
-                        background: Some(iced::Background::Color(alpha(WHITE, 0.1))),
-                        border: iced::Border {
-                            radius: 12.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }))
-                    .into(),
+                icon("audio-x-generic-symbolic", 24),
                 widget::column::with_children(vec![
-                    label(t.nothing_playing, 15, WHITE).font(cosmic::font::semibold()).into(),
-                    label(t.nothing_playing_about, 12, GRAY).into(),
+                    text::heading(t.nothing_playing).into(),
+                    text::caption(t.nothing_playing_about).into(),
                 ])
-                .spacing(2)
                 .width(Length::Fill)
                 .into(),
             ])
-            .spacing(14)
+            .spacing(space.space_s)
             .align_y(Alignment::Center),
-            None,
         )
+        .into()
     }
 
-    fn timer_card(&self) -> Element<'_, Message> {
+    fn timer_section(&self) -> Element<'_, Message> {
         let t = strings();
+        let space = theme::active().cosmic().spacing;
         let Some(timer) = &self.timer else {
             let presets = PRESETS
                 .iter()
-                .map(|&minutes| chip(format!("{minutes} min"), false, Message::StartTimer(minutes)))
+                .map(|&minutes| {
+                    button::standard(format!("{minutes} min"))
+                        .on_press(Message::StartTimer(minutes))
+                        .into()
+                })
                 .collect::<Vec<_>>();
-            return card(
+            return padded_control(
                 widget::column::with_children(vec![
                     widget::row::with_children(vec![
-                        glyph("alarm-symbolic", 16, ORANGE),
-                        label(t.start_timer, 13, GRAY).into(),
+                        tinted("alarm-symbolic", 16, warning_of),
+                        text::body(t.start_timer).into(),
                     ])
-                    .spacing(8)
+                    .spacing(space.space_xs)
                     .align_y(Alignment::Center)
                     .into(),
-                    widget::row::with_children(presets).spacing(6).into(),
+                    widget::row::with_children(presets).spacing(space.space_xxs).into(),
                 ])
-                .spacing(12),
-                None,
-            );
+                .spacing(space.space_xs),
+            )
+            .into();
         };
         let running = timer.running();
-        card(
+        padded_control(
             widget::column::with_children(vec![
                 widget::row::with_children(vec![
+                    tinted("alarm-symbolic", 24, warning_of),
                     widget::column::with_children(vec![
-                        label(if running { t.timer } else { t.paused }, 12, GRAY).into(),
-                        label(timer::clock(timer.left()), 34, ORANGE)
-                            .font(cosmic::font::semibold())
-                            .into(),
+                        text::caption(if running { t.timer } else { t.paused }).into(),
+                        text::title3(timer::clock(timer.left())).into(),
                     ])
                     .width(Length::Fill)
                     .into(),
-                    ghost(label("+1:00", 13, ORANGE).font(cosmic::font::semibold()), 18.0, Some(alpha(ORANGE, 0.16)))
-                        .padding([10, 12])
-                        .on_press(Message::AddMinute)
+                    button::standard("+1:00").on_press(Message::AddMinute).into(),
+                    button::icon(
+                        widget::icon::from_name(if running {
+                            "media-playback-pause-symbolic"
+                        } else {
+                            "media-playback-start-symbolic"
+                        })
+                        .symbolic(true),
+                    )
+                    .on_press(Message::ToggleTimer)
+                    .into(),
+                    button::icon(widget::icon::from_name("window-close-symbolic").symbolic(true))
+                        .on_press(Message::CancelTimer)
                         .into(),
-                    round_button(
-                        if running { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" },
-                        20,
-                        44.0,
-                        Some(alpha(ORANGE, 0.22)),
-                        ORANGE,
-                        Some(Message::ToggleTimer),
-                    ),
-                    round_button(
-                        "window-close-symbolic",
-                        18,
-                        44.0,
-                        Some(alpha(WHITE, 0.14)),
-                        WHITE,
-                        Some(Message::CancelTimer),
-                    ),
                 ])
-                .spacing(10)
+                .spacing(space.space_xs)
                 .align_y(Alignment::Center)
                 .into(),
-                widgets::meter(timer.progress(), ORANGE, 5.0),
+                widget::determinate_linear(timer.progress())
+                    .width(Length::Fill)
+                    .into(),
             ])
-            .spacing(12),
-            None,
+            .spacing(space.space_xs),
         )
+        .into()
     }
 
-    fn timer_done_card(&self) -> Element<'_, Message> {
+    fn timer_done_section(&self) -> Element<'_, Message> {
         let t = strings();
-        card(
+        let space = theme::active().cosmic().spacing;
+        padded_control(
             widget::row::with_children(vec![
-                glyph("alarm-symbolic", 28, ORANGE),
+                tinted("alarm-symbolic", 24, accent_of),
                 widget::column::with_children(vec![
-                    label(t.timer_done, 16, ORANGE).font(cosmic::font::semibold()).into(),
-                    label(t.timer_done_body, 12, GRAY).into(),
+                    text::heading(t.timer_done).into(),
+                    text::caption(t.timer_done_body).into(),
                 ])
-                .spacing(2)
                 .width(Length::Fill)
                 .into(),
             ])
-            .spacing(14)
+            .spacing(space.space_s)
             .align_y(Alignment::Center),
-            Some(ORANGE),
         )
+        .into()
     }
 }
