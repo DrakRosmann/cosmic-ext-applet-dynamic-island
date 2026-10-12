@@ -59,6 +59,9 @@ pub struct App {
     settings: Settings,
     /// The popup's settings page, instead of the activities.
     customizing: bool,
+    /// The applet's width in the panel, as last laid out: it follows its
+    /// text, and the popup is centered under it.
+    width: Option<f32>,
 }
 
 /// Something that happened, shown for a moment over the rest.
@@ -103,6 +106,7 @@ pub enum Message {
     Set(Toggle, bool),
     SetTitleWidth(TitleWidth),
     SettingsChanged,
+    Resized(window::Id, f32),
     ToggleTimer,
     AddMinute,
     CancelTimer,
@@ -124,6 +128,12 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
 
 fn one_line() -> Ellipsize {
     Ellipsize::End(EllipsizeHeightLimit::Lines(1))
+}
+
+/// About how wide a text is in the panel, up to `max`: until the applet is
+/// laid out and its width known.
+fn estimate(text: &str, max: f32) -> f32 {
+    (text.chars().count() as f32 * 7.5).min(max)
 }
 
 /// How long since, as a stopwatch: 0:07, 1:02:03.
@@ -280,7 +290,13 @@ impl App {
                     parts.push((cover(media, side), side));
                 }
                 if horizontal && settings.show_title {
-                    parts.push(label(media.title.clone(), settings.title_width.pixels()));
+                    // As wide as the title, up to the width picked.
+                    let max = settings.title_width.pixels();
+                    let title = applet.text(media.title.clone()).ellipsize(one_line());
+                    parts.push((
+                        widget::container(title).max_width(max).into(),
+                        estimate(&media.title, max),
+                    ));
                 }
                 if settings.show_bars {
                     parts.push((Bars::new(accent(), media.playing, side).into(), side));
@@ -402,10 +418,12 @@ impl cosmic::Application for App {
                 self.customizing = false;
                 // Under the middle of the applet, however wide it is.
                 let applet = &self.core.applet;
-                let width = self.panel_parts().1;
                 let icon = f32::from(applet.suggested_size(true).0);
-                let major = i32::from(applet.suggested_padding(true).0);
-                let half = major + ((width - icon) / 2.0).round() as i32;
+                let major = f32::from(applet.suggested_padding(true).0);
+                let width = self
+                    .width
+                    .unwrap_or_else(|| self.panel_parts().1 + 2.0 * major);
+                let half = ((width - icon) / 2.0).round() as i32;
                 let horizontal = applet.is_horizontal();
                 return cosmic::surface::surface_task(cosmic::surface::action::app_popup(
                     |_: &Self| Default::default(),
@@ -525,6 +543,11 @@ impl cosmic::Application for App {
             Message::Set(toggle, value) => self.settings.set(toggle, value),
             Message::SetTitleWidth(width) => self.settings.set_title_width(width),
             Message::SettingsChanged => self.settings = Settings::load(),
+            Message::Resized(id, width) => {
+                if self.core.main_window_id() == Some(id) {
+                    self.width = Some(width);
+                }
+            }
             Message::ToggleTimer => {
                 if let Some(timer) = &mut self.timer {
                     timer.toggle();
@@ -561,6 +584,7 @@ impl cosmic::Application for App {
             power::subscription().map(Message::Battery),
             recording::subscription().map(Message::Recording),
             config::subscription().map(|()| Message::SettingsChanged),
+            window::resize_events().map(|(id, size)| Message::Resized(id, size.width)),
         ];
         let lingering = self.settings.media
             && self

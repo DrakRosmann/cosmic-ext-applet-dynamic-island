@@ -37,8 +37,8 @@ Clicar abre o popup, como o dos applets do COSMIC:
 
 No fim do popup, **Personalizar** abre as opções, que valem para a ilha em todas as telas:
 
-- **no painel**: mostrar ou não a capa, o título da música (com a largura pequena, média ou
-  grande) e as barras animadas;
+- **no painel**: mostrar ou não a capa, o título da música (que ocupa só o espaço que precisa,
+  até a largura máxima: pequena, média ou grande) e as barras animadas;
 - **atividades**: ligar ou desligar cada uma: mídia, apps gravando, timer e carregamento.
 
 O texto segue o idioma do sistema: português ou inglês.
