@@ -44,7 +44,7 @@
         {
           "type": "git",
           "url": "https://github.com/DrakRosmann/cosmic-ext-applet-dynamic-island.git",
-          "commit": "COMMIT"
+          "commit": "18e6438c1d6e51ed189bd69809eff3426cf4589d"
         },
         "cargo-sources.json"
       ]
