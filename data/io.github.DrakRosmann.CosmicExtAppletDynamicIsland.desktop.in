@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Dynamic Island
+Name[pt_BR]=Dynamic Island
+Comment=Live activities in the panel: what's playing, timers and charging, like the iPhone's Dynamic Island
+Comment[pt_BR]=Atividades ao vivo no painel: o que está tocando, timers e carregamento, como a Dynamic Island do iPhone
+Type=Application
+Exec=@bindir@/cosmic-ext-applet-dynamic-island
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Media;Music;Island;Timer;Live;Activities;
+Icon=io.github.DrakRosmann.CosmicExtAppletDynamicIsland
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-HostWaylandDisplay=true

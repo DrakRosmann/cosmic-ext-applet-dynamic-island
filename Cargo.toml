@@ -1,0 +1,35 @@
+[package]
+name = "cosmic-ext-applet-dynamic-island"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "A Dynamic Island for the COSMIC panel: live activities for media, timers and charging"
+
+[dependencies]
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
+    "applet",
+    "dbus-config",
+    "multi-window",
+    "tokio",
+    "wayland",
+    "winit",
+] }
+tokio = { version = "1.49.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+zbus = { version = "5.14.0", default-features = false, features = ["tokio"] }
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+lto = "thin"
+
+# Same pins as cosmic-applets epoch-1.8.0, to match the installed panel.
+[patch."https://github.com/smithay/client-toolkit.git"]
+sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "32283d7" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "32283d7" }
