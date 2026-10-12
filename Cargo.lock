@@ -936,6 +936,7 @@ dependencies = [
  "futures",
  "image",
  "libcosmic",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

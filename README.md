@@ -35,6 +35,12 @@ Clicar abre o popup, como o dos applets do COSMIC:
   que falta, a barra de progresso, +1:00, pausar e cancelar;
 - a **bateria**, enquanto carrega: a porcentagem e quanto falta para encher.
 
+No fim do popup, **Personalizar** abre as opções, que valem para a ilha em todas as telas:
+
+- **no painel**: mostrar ou não a capa, o título da música (com a largura pequena, média ou
+  grande) e as barras animadas;
+- **atividades**: ligar ou desligar cada uma: mídia, apps gravando, timer e carregamento.
+
 O texto segue o idioma do sistema: português ou inglês.
 
 ## Instalar
@@ -52,9 +58,9 @@ de preferência no centro do painel de cima.
 
 ## Desenvolvimento
 
-`COSMIC_ISLAND_PREVIEW=popup` abre a ilha sozinha ao iniciar e `=timer` começa um
-timer de 1 minuto, para tirar capturas de tela sem clicar no painel
-(`COSMIC_ISLAND_PREVIEW=timer,popup` faz as duas coisas).
+`COSMIC_ISLAND_PREVIEW=popup` abre a ilha sozinha ao iniciar, `=settings` abre direto em
+Personalizar e `=timer` começa um timer de 1 minuto, para tirar capturas de tela sem clicar
+no painel (`COSMIC_ISLAND_PREVIEW=timer,popup` faz as duas coisas).
 
 ## Licença
 

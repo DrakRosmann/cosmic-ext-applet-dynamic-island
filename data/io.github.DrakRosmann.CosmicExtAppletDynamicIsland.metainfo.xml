@@ -18,6 +18,7 @@
       <li>Apps recording from the microphone, with a red dot and how long they have been recording</li>
       <li>The charger plugged in, shown for a moment</li>
       <li>Middle-click the island to play or pause</li>
+      <li>Customize it: the cover, the title and its width, the bars, and which activities to show</li>
     </ul>
   </description>
   <url type="homepage">https://github.com/DrakRosmann/cosmic-ext-applet-dynamic-island</url>

@@ -16,6 +16,19 @@ pub struct Strings {
     pub charged: &'static str,
     pub until_full: &'static str,
     pub recording: &'static str,
+    pub customize: &'static str,
+    pub on_the_panel: &'static str,
+    pub show_cover: &'static str,
+    pub show_title: &'static str,
+    pub title_width: &'static str,
+    pub small: &'static str,
+    pub medium: &'static str,
+    pub large: &'static str,
+    pub show_bars: &'static str,
+    pub activities: &'static str,
+    pub media: &'static str,
+    pub recording_activity: &'static str,
+    pub charging_activity: &'static str,
 }
 
 static EN: Strings = Strings {
@@ -30,6 +43,19 @@ static EN: Strings = Strings {
     charged: "Charged",
     until_full: "until full",
     recording: "Recording",
+    customize: "Customize",
+    on_the_panel: "On the panel",
+    show_cover: "Cover",
+    show_title: "Song title",
+    title_width: "Title width",
+    small: "Small",
+    medium: "Medium",
+    large: "Large",
+    show_bars: "Animated bars",
+    activities: "Activities",
+    media: "Media",
+    recording_activity: "Apps recording",
+    charging_activity: "Charging",
 };
 
 static PT: Strings = Strings {
@@ -44,6 +70,19 @@ static PT: Strings = Strings {
     charged: "Carregada",
     until_full: "para carregar",
     recording: "Gravando",
+    customize: "Personalizar",
+    on_the_panel: "No painel",
+    show_cover: "Capa",
+    show_title: "Título da música",
+    title_width: "Largura do título",
+    small: "Pequena",
+    medium: "Média",
+    large: "Grande",
+    show_bars: "Barras animadas",
+    activities: "Atividades",
+    media: "Mídia",
+    recording_activity: "Apps gravando",
+    charging_activity: "Carregamento",
 };
 
 pub fn strings() -> &'static Strings {

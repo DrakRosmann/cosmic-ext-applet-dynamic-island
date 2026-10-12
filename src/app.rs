@@ -23,6 +23,7 @@ use cosmic::{
 };
 
 use crate::{
+    config::{self, Settings, TitleWidth, Toggle},
     i18n::strings,
     media::{self, Control, Media},
     power::{self, Battery},
@@ -37,8 +38,6 @@ const LINGER: Duration = Duration::from_secs(5 * 60);
 const FLASH_CHARGING: Duration = Duration::from_secs(4);
 const FLASH_TIMER: Duration = Duration::from_secs(10);
 const PRESETS: [u64; 4] = [1, 5, 10, 25];
-/// Room for the title in the panel.
-const TITLE_WIDTH: f32 = 160.0;
 const COVER: f32 = 56.0;
 
 #[derive(Default)]
@@ -57,6 +56,9 @@ pub struct App {
     flash: Option<(Flash, Instant)>,
     /// Apps recording from a microphone, and since when.
     recorders: Vec<(Recorder, Instant)>,
+    settings: Settings,
+    /// The popup's settings page, instead of the activities.
+    customizing: bool,
 }
 
 /// Something that happened, shown for a moment over the rest.
@@ -97,6 +99,10 @@ pub enum Message {
     Battery(Option<Battery>),
     Recording(Vec<Recorder>),
     StartTimer(u64),
+    Customize(bool),
+    Set(Toggle, bool),
+    SetTitleWidth(TitleWidth),
+    SettingsChanged,
     ToggleTimer,
     AddMinute,
     CancelTimer,
@@ -206,10 +212,13 @@ impl App {
             return Activity::Flash(flash);
         }
         // Someone listening comes first, as the phone's orange dot.
-        if let Some((recorder, since)) = self.recorders.first() {
+        if let Some((recorder, since)) = self.recorders.first().filter(|_| self.settings.recording) {
             return Activity::Recording(recorder, *since);
         }
-        match (self.shown_media().filter(|m| self.is_live(m)), &self.timer) {
+        let media = self
+            .shown_media()
+            .filter(|m| self.settings.media && self.is_live(m));
+        match (media, self.timer()) {
             // A running timer before paused music, as the phone does.
             (Some(media), Some(timer)) if !media.playing && timer.running() => Activity::Timer(timer),
             (Some(media), _) => Activity::Media(media),
@@ -218,11 +227,16 @@ impl App {
         }
     }
 
+    /// The timer, unless it's turned off in the settings.
+    fn timer(&self) -> Option<&Timer> {
+        self.timer.as_ref().filter(|_| self.settings.timer)
+    }
+
     /// The timer, when the island shows something else: beside it.
     fn side_timer(&self) -> Option<&Timer> {
         match self.activity() {
             Activity::Timer(_) => None,
-            _ => self.timer.as_ref(),
+            _ => self.timer(),
         }
     }
 
@@ -261,11 +275,20 @@ impl App {
                 }
             }
             Activity::Media(media) => {
-                parts.push((cover(media, side), side));
-                if horizontal {
-                    parts.push(label(media.title.clone(), TITLE_WIDTH));
+                let settings = &self.settings;
+                if settings.show_cover {
+                    parts.push((cover(media, side), side));
                 }
-                parts.push((Bars::new(accent(), media.playing, side).into(), side));
+                if horizontal && settings.show_title {
+                    parts.push(label(media.title.clone(), settings.title_width.pixels()));
+                }
+                if settings.show_bars {
+                    parts.push((Bars::new(accent(), media.playing, side).into(), side));
+                }
+                // All turned off: a note, not nothing.
+                if parts.is_empty() {
+                    parts.push((icon("audio-x-generic-symbolic", size), side));
+                }
             }
             Activity::Timer(timer) => {
                 parts.push((tinted("alarm-symbolic", size, warning_of), side));
@@ -322,22 +345,31 @@ impl cosmic::Application for App {
     const APP_ID: &'static str = crate::APP_ID;
 
     fn init(core: app::Core, _flags: ()) -> (Self, app::Task<Message>) {
-        // COSMIC_ISLAND_PREVIEW=popup opens the popup by itself, and =timer
-        // starts a timer, to take screenshots without clicking the panel.
+        // COSMIC_ISLAND_PREVIEW=popup opens the popup by itself, =settings on
+        // its settings, and =timer starts a timer, to take screenshots
+        // without clicking the panel.
         let preview = std::env::var("COSMIC_ISLAND_PREVIEW").unwrap_or_default();
         let mut tasks = Vec::new();
         if preview.contains("timer") {
             tasks.push(Task::done(cosmic::action::app(Message::StartTimer(1))));
         }
-        if preview.contains("popup") {
+        if preview.contains("popup") || preview.contains("settings") {
+            let settings = preview.contains("settings");
             tasks.push(Task::future(async {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
                 cosmic::action::app(Message::TogglePopup)
             }));
+            if settings {
+                tasks.push(Task::future(async {
+                    tokio::time::sleep(Duration::from_millis(1700)).await;
+                    cosmic::action::app(Message::Customize(true))
+                }));
+            }
         }
         (
             Self {
                 core,
+                settings: Settings::load(),
                 ..Self::default()
             },
             Task::batch(tasks),
@@ -367,6 +399,7 @@ impl cosmic::Application for App {
                 };
                 let id = window::Id::unique();
                 self.popup = Some(id);
+                self.customizing = false;
                 // Under the middle of the applet, however wide it is.
                 let applet = &self.core.applet;
                 let width = self.panel_parts().1;
@@ -459,7 +492,10 @@ impl cosmic::Application for App {
             }
             Message::Battery(battery) => {
                 let was_charging = self.battery.map(|b| b.charging);
-                if was_charging == Some(false) && battery.is_some_and(|b| b.charging) {
+                if self.settings.charging
+                    && was_charging == Some(false)
+                    && battery.is_some_and(|b| b.charging)
+                {
                     self.flash = Some((Flash::Charging, Instant::now()));
                 }
                 self.battery = battery;
@@ -485,6 +521,10 @@ impl cosmic::Application for App {
                     self.flash = None;
                 }
             }
+            Message::Customize(customizing) => self.customizing = customizing,
+            Message::Set(toggle, value) => self.settings.set(toggle, value),
+            Message::SetTitleWidth(width) => self.settings.set_title_width(width),
+            Message::SettingsChanged => self.settings = Settings::load(),
             Message::ToggleTimer => {
                 if let Some(timer) = &mut self.timer {
                     timer.toggle();
@@ -520,15 +560,18 @@ impl cosmic::Application for App {
             media::subscription().map(Message::Media),
             power::subscription().map(Message::Battery),
             recording::subscription().map(Message::Recording),
+            config::subscription().map(|()| Message::SettingsChanged),
         ];
-        let lingering = self
+        let lingering = self.settings.media
+            && self
             .paused_since
             .values()
             .any(|since| since.elapsed() < LINGER);
         let progressing = self.popup.is_some() && self.shown_media().is_some_and(|m| m.playing);
-        let every = if self.timer.is_some_and(|t| t.running()) {
+        let recording = self.settings.recording && !self.recorders.is_empty();
+        let every = if self.timer().is_some_and(|t| t.running()) {
             Some(Duration::from_millis(250))
-        } else if self.flash.is_some() || progressing || !self.recorders.is_empty() {
+        } else if self.flash.is_some() || progressing || recording {
             Some(Duration::from_millis(500))
         } else if lingering {
             // Only to let the player go, in its time.
@@ -558,10 +601,15 @@ impl cosmic::Application for App {
                 .align_x(Alignment::Center)
                 .into()
         };
-        let padding = if applet.is_horizontal() {
-            [minor, major]
+        // As COSMIC's text buttons: as high as the panel's icons with their
+        // room, never higher, for the panel not to grow with the text.
+        let size = applet.suggested_size(true).0;
+        let (content, padding) = if applet.is_horizontal() {
+            let content = widget::container(content).center_y(Length::Fixed(f32::from(size + 2 * minor)));
+            (content, [0, major])
         } else {
-            [major, minor]
+            let content = widget::container(content).center_x(Length::Fixed(f32::from(size + 2 * minor)));
+            (content, [major, 0])
         };
         let button = button::custom(content)
             .padding(padding)
@@ -576,21 +624,30 @@ impl cosmic::Application for App {
         if self.popup != Some(id) {
             return widget::text("").into();
         }
-        let mut content = widget::column::with_capacity(8).padding([8, 0]);
+        if self.customizing {
+            return self.core.applet.popup_container(self.settings_page()).into();
+        }
+        let mut content = widget::column::with_capacity(10).padding([8, 0]);
         if self.flash() == Some(Flash::TimerDone) {
             content = content.push(self.timer_done_section()).push(divided());
         }
-        if !self.recorders.is_empty() {
+        if self.settings.recording && !self.recorders.is_empty() {
             content = content.push(self.recording_section()).push(divided());
         }
         content = match self.shown_media() {
             Some(media) => content.extend(self.media_section(media)),
             None => content.push(self.empty_section()),
         };
-        content = content.push(divided()).push(self.timer_section());
-        if let Some(battery) = self.battery.filter(|b| b.charging) {
+        if self.settings.timer {
+            content = content.push(divided()).push(self.timer_section());
+        }
+        if let Some(battery) = self.battery.filter(|b| b.charging && self.settings.charging) {
             content = content.push(divided()).push(battery_section(battery));
         }
+        // As the audio applet's "Sound settings", last.
+        content = content.push(divided()).push(
+            menu_button(text::body(strings().customize)).on_press(Message::Customize(true)),
+        );
         self.core.applet.popup_container(content).into()
     }
 
@@ -826,6 +883,76 @@ impl App {
             ])
             .spacing(space.space_xs),
         )
+        .into()
+    }
+
+    /// What the island shows, to turn on and off: in the panel, and which
+    /// activities.
+    fn settings_page(&self) -> Element<'_, Message> {
+        let t = strings();
+        let space = theme::active().cosmic().spacing;
+        let settings = &self.settings;
+        let toggle = |label: &'static str, toggle: Toggle| -> Element<'_, Message> {
+            padded_control(
+                widget::toggler(settings.get(toggle))
+                    .label(label.to_owned())
+                    .on_toggle(move |on| Message::Set(toggle, on))
+                    .width(Length::Fill),
+            )
+            .into()
+        };
+        let heading = |label: &'static str| -> Element<'_, Message> {
+            padded_control(text::caption_heading(label)).into()
+        };
+        let widths = TitleWidth::ALL
+            .iter()
+            .map(|&width| {
+                let name = match width {
+                    TitleWidth::Small => t.small,
+                    TitleWidth::Medium => t.medium,
+                    TitleWidth::Large => t.large,
+                };
+                let pick = Message::SetTitleWidth(width);
+                let button = if width == settings.title_width {
+                    button::suggested(name)
+                } else {
+                    button::standard(name)
+                };
+                button.on_press_maybe(settings.show_title.then_some(pick)).into()
+            })
+            .collect::<Vec<_>>();
+        let back = menu_button(
+            widget::row::with_children(vec![
+                icon("go-previous-symbolic", 16),
+                text::body(t.customize).into(),
+            ])
+            .spacing(space.space_xs)
+            .align_y(Alignment::Center),
+        )
+        .on_press(Message::Customize(false));
+        widget::column::with_children(vec![
+            back.into(),
+            divided(),
+            heading(t.on_the_panel),
+            toggle(t.show_cover, Toggle::ShowCover),
+            toggle(t.show_title, Toggle::ShowTitle),
+            padded_control(
+                widget::column::with_children(vec![
+                    text::body(t.title_width).into(),
+                    widget::row::with_children(widths).spacing(space.space_xxs).into(),
+                ])
+                .spacing(space.space_xxs),
+            )
+            .into(),
+            toggle(t.show_bars, Toggle::ShowBars),
+            divided(),
+            heading(t.activities),
+            toggle(t.media, Toggle::Media),
+            toggle(t.recording_activity, Toggle::Recording),
+            toggle(t.timer, Toggle::Timer),
+            toggle(t.charging_activity, Toggle::Charging),
+        ])
+        .padding([8, 0])
         .into()
     }
 
