@@ -25,6 +25,11 @@
   <icon type="stock">io.github.DrakRosmann.CosmicExtAppletDynamicIsland</icon>
   <launchable type="desktop-id">io.github.DrakRosmann.CosmicExtAppletDynamicIsland.desktop</launchable>
   <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/DrakRosmann/cosmic-ext-applet-dynamic-island/main/assets/popup.png</image>
+    </screenshot>
+  </screenshots>
   <releases>
     <release version="0.1.0" date="2026-10-12"/>
   </releases>
