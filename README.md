@@ -13,6 +13,9 @@ No painel, a ilha mostra a atividade mais importante:
   YouTube, VLC, mpv, Rhythmbox… Um player pausado sai da ilha depois de 5 minutos;
 - **timer**: a contagem regressiva, com o despertador na cor de aviso do tema. Com música
   tocando, o timer fica ao lado dela, como no iPhone;
+- **gravando**: quando algum app grava do microfone (o Gravador de som, uma chamada, o
+  OBS…), um ponto vermelho com o tempo de gravação, como o ponto laranja do iPhone; no popup
+  aparece quem está gravando, com o nome e o ícone do app;
 - **carregando**: ao ligar o carregador, a ilha mostra por um instante "Carregando" e a
   porcentagem em verde;
 - **acabou o tempo**: quando o timer termina a ilha avisa, e chega uma notificação.

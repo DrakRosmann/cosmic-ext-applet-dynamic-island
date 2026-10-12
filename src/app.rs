@@ -26,8 +26,9 @@ use crate::{
     i18n::strings,
     media::{self, Control, Media},
     power::{self, Battery},
+    recording::{self, Recorder},
     timer::{self, Timer},
-    widgets::{Bars, accent, accent_of, icon, success_of, tinted, warning_of},
+    widgets::{Bars, accent, accent_of, destructive_of, icon, success_of, tinted, warning_of},
 };
 
 /// A paused player stays on the island this long, then leaves it.
@@ -54,6 +55,8 @@ pub struct App {
     timer: Option<Timer>,
     battery: Option<Battery>,
     flash: Option<(Flash, Instant)>,
+    /// Apps recording from a microphone, and since when.
+    recorders: Vec<(Recorder, Instant)>,
 }
 
 /// Something that happened, shown for a moment over the rest.
@@ -76,6 +79,7 @@ impl Flash {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Activity<'a> {
     Flash(Flash),
+    Recording(&'a Recorder, Instant),
     Media(&'a Media),
     Timer(&'a Timer),
     Idle,
@@ -91,6 +95,7 @@ pub enum Message {
     Seek(f32),
     SeekDone,
     Battery(Option<Battery>),
+    Recording(Vec<Recorder>),
     StartTimer(u64),
     ToggleTimer,
     AddMinute,
@@ -113,6 +118,13 @@ fn run<F: Future<Output = zbus::Result<()>> + Send + 'static>(
 
 fn one_line() -> Ellipsize {
     Ellipsize::End(EllipsizeHeightLimit::Lines(1))
+}
+
+/// How long since, as a stopwatch: 0:07, 1:02:03.
+fn since(start: Instant) -> String {
+    let seconds = start.elapsed().as_secs();
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
 }
 
 /// 3:07, from microseconds.
@@ -193,6 +205,10 @@ impl App {
         if let Some(flash) = self.flash() {
             return Activity::Flash(flash);
         }
+        // Someone listening comes first, as the phone's orange dot.
+        if let Some((recorder, since)) = self.recorders.first() {
+            return Activity::Recording(recorder, *since);
+        }
         match (self.shown_media().filter(|m| self.is_live(m)), &self.timer) {
             // A running timer before paused music, as the phone does.
             (Some(media), Some(timer)) if !media.playing && timer.running() => Activity::Timer(timer),
@@ -237,6 +253,13 @@ impl App {
                 widget::icon::icon(island_icon()).size(size).into(),
                 side,
             )),
+            Activity::Recording(_, since) => {
+                parts.push((tinted("media-record-symbolic", size, destructive_of), side));
+                if horizontal {
+                    let width = if since.elapsed().as_secs() >= 3600 { 64.0 } else { 44.0 };
+                    parts.push(label(self::since(since), width));
+                }
+            }
             Activity::Media(media) => {
                 parts.push((cover(media, side), side));
                 if horizontal {
@@ -441,6 +464,21 @@ impl cosmic::Application for App {
                 }
                 self.battery = battery;
             }
+            Message::Recording(recorders) => {
+                // Each keeps the time it started at.
+                let now = Instant::now();
+                self.recorders = recorders
+                    .into_iter()
+                    .map(|recorder| {
+                        let since = self
+                            .recorders
+                            .iter()
+                            .find(|(r, _)| r.key == recorder.key)
+                            .map_or(now, |(_, since)| *since);
+                        (recorder, since)
+                    })
+                    .collect();
+            }
             Message::StartTimer(minutes) => {
                 self.timer = Some(Timer::start(Duration::from_secs(minutes * 60)));
                 if self.flash() == Some(Flash::TimerDone) {
@@ -481,6 +519,7 @@ impl cosmic::Application for App {
         let mut subscriptions = vec![
             media::subscription().map(Message::Media),
             power::subscription().map(Message::Battery),
+            recording::subscription().map(Message::Recording),
         ];
         let lingering = self
             .paused_since
@@ -489,7 +528,7 @@ impl cosmic::Application for App {
         let progressing = self.popup.is_some() && self.shown_media().is_some_and(|m| m.playing);
         let every = if self.timer.is_some_and(|t| t.running()) {
             Some(Duration::from_millis(250))
-        } else if self.flash.is_some() || progressing {
+        } else if self.flash.is_some() || progressing || !self.recorders.is_empty() {
             Some(Duration::from_millis(500))
         } else if lingering {
             // Only to let the player go, in its time.
@@ -540,6 +579,9 @@ impl cosmic::Application for App {
         let mut content = widget::column::with_capacity(8).padding([8, 0]);
         if self.flash() == Some(Flash::TimerDone) {
             content = content.push(self.timer_done_section()).push(divided());
+        }
+        if !self.recorders.is_empty() {
+            content = content.push(self.recording_section()).push(divided());
         }
         content = match self.shown_media() {
             Some(media) => content.extend(self.media_section(media)),
@@ -720,9 +762,18 @@ impl App {
             let presets = PRESETS
                 .iter()
                 .map(|&minutes| {
-                    button::standard(format!("{minutes} min"))
-                        .on_press(Message::StartTimer(minutes))
-                        .into()
+                    // Sharing the row, each on one line.
+                    button::custom(
+                        text::body(format!("{minutes} min"))
+                            .wrapping(iced::widget::text::Wrapping::None)
+                            .align_x(Alignment::Center)
+                            .width(Length::Fill),
+                    )
+                    .class(theme::Button::Standard)
+                    .padding([space.space_xxs, space.space_xxs])
+                    .width(Length::Fill)
+                    .on_press(Message::StartTimer(minutes))
+                    .into()
                 })
                 .collect::<Vec<_>>();
             return padded_control(
@@ -776,6 +827,40 @@ impl App {
             .spacing(space.space_xs),
         )
         .into()
+    }
+
+    /// Who records, each with its icon and for how long.
+    fn recording_section(&self) -> Element<'_, Message> {
+        let t = strings();
+        let space = theme::active().cosmic().spacing;
+        let rows = self
+            .recorders
+            .iter()
+            .map(|(recorder, start)| {
+                let app_icon: Element<'_, Message> = match recorder
+                    .icon
+                    .as_deref()
+                    .and_then(|name| widget::icon::from_name(name).size(32).path())
+                {
+                    Some(path) => widget::icon::icon(widget::icon::from_path(path)).size(32).into(),
+                    None => icon("audio-input-microphone-symbolic", 32),
+                };
+                widget::row::with_children(vec![
+                    app_icon,
+                    widget::column::with_children(vec![
+                        text::heading(recorder.name.clone()).ellipsize(one_line()).into(),
+                        text::caption(format!("{} · {}", t.recording, since(*start))).into(),
+                    ])
+                    .width(Length::Fill)
+                    .into(),
+                    tinted("media-record-symbolic", 16, destructive_of),
+                ])
+                .spacing(space.space_s)
+                .align_y(Alignment::Center)
+                .into()
+            })
+            .collect::<Vec<_>>();
+        padded_control(widget::column::with_children(rows).spacing(space.space_xs)).into()
     }
 
     fn timer_done_section(&self) -> Element<'_, Message> {

@@ -175,6 +175,10 @@ pub fn warning_of(theme: &cosmic::Theme) -> Color {
     theme.cosmic().warning_color().into()
 }
 
+pub fn destructive_of(theme: &cosmic::Theme) -> Color {
+    theme.cosmic().destructive_color().into()
+}
+
 pub fn success_of(theme: &cosmic::Theme) -> Color {
     theme.cosmic().success_color().into()
 }

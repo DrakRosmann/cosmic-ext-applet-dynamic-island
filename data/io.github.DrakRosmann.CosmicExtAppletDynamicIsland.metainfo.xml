@@ -7,14 +7,15 @@
     <name>DrakRosmann</name>
   </developer>
   <name>Dynamic Island</name>
-  <summary>Live activities in the panel: what's playing, timers and charging</summary>
-  <summary xml:lang="pt-BR">Atividades ao vivo no painel: o que está tocando, timers e carregamento</summary>
+  <summary>Live activities in the panel: what's playing, recording, timers and charging</summary>
+  <summary xml:lang="pt-BR">Atividades ao vivo no painel: o que está tocando, gravando, timers e carregamento</summary>
   <description>
     <p>Live activities in the COSMIC™ panel, like the iPhone's Dynamic Island and the live activities of macOS: it shows what's going on and opens into it, in the look of COSMIC's own applets.</p>
     <ul>
       <li>What's playing in any media player, with its cover, and bars dancing in the theme's accent color</li>
       <li>Click to open it: the cover, the progress you can drag, and the player's controls</li>
       <li>A timer, counting down in the panel, beside the music while it plays</li>
+      <li>Apps recording from the microphone, with a red dot and how long they have been recording</li>
       <li>The charger plugged in, shown for a moment</li>
       <li>Middle-click the island to play or pause</li>
     </ul>

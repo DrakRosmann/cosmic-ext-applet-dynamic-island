@@ -4,6 +4,7 @@ mod app;
 mod i18n;
 mod media;
 mod power;
+mod recording;
 mod timer;
 mod widgets;
 
