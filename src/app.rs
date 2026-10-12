@@ -964,12 +964,10 @@ impl App {
             .recorders
             .iter()
             .map(|(recorder, start)| {
-                let app_icon: Element<'_, Message> = match recorder
-                    .icon
-                    .as_deref()
-                    .and_then(|name| widget::icon::from_name(name).size(32).path())
-                {
-                    Some(path) => widget::icon::icon(widget::icon::from_path(path)).size(32).into(),
+                let app_icon: Element<'_, Message> = match &recorder.icon {
+                    Some(path) => widget::icon::icon(widget::icon::from_path(path.clone()))
+                        .size(32)
+                        .into(),
                     None => icon("audio-input-microphone-symbolic", 32),
                 };
                 widget::row::with_children(vec![

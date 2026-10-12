@@ -56,6 +56,13 @@ sudo ./install.sh /usr  # para todos os usuários
 E adicione **Dynamic Island** em Configurações > Área de trabalho > Painel > Applets,
 de preferência no centro do painel de cima.
 
+## Flatpak
+
+`flatpak/` tem o manifesto para o repositório Flatpak do COSMIC (a COSMIC Store).
+Depois de mudar as dependências, `flatpak/generate-sources.sh` refaz o `cargo-sources.json`.
+No Flatpak, as capas de players em outro sandbox (como um navegador em Flatpak) não
+aparecem: o arquivo fica no `/tmp` do sandbox do player.
+
 ## Desenvolvimento
 
 `COSMIC_ISLAND_PREVIEW=popup` abre a ilha sozinha ao iniciar, `=settings` abre direto em
